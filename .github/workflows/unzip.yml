@@ -1,5 +1,7 @@
-name: Unzip and Setup
+name: Unzip
 
+# 手機上傳專用：上傳 .zip 後手動執行本工作流程，由 Actions 在伺服器端解壓。
+# 只需執行一次；完成後本檔與 .zip 會自動刪除。
 on:
   workflow_dispatch:
 
@@ -15,31 +17,30 @@ jobs:
       - name: Unzip
         run: |
           set -e
+          shopt -s dotglob
           ZIP=$(ls *.zip 2>/dev/null | head -n 1)
           if [ -z "$ZIP" ]; then
-            echo "ERROR: no zip file found in repo root"
+            echo "::error::找不到 .zip，請先上傳 hk-transit-eta.zip"
             exit 1
           fi
-          echo "Using $ZIP"
-          rm -rf /tmp/x
-          mkdir -p /tmp/x
-          unzip -o -q "$ZIP" -d /tmp/x
-          SRC=/tmp/x
-          E=$(ls -A /tmp/x)
-          C=$(echo "$E" | wc -l)
-          if [ "$C" = "1" ] && [ -d "/tmp/x/$E" ]; then
-            SRC="/tmp/x/$E"
-          fi
-          echo "Source dir: $SRC"
+          rm -rf /tmp/u && mkdir -p /tmp/u
+          unzip -o -q "$ZIP" -d /tmp/u
+          E=$(ls -A /tmp/u); C=$(echo "$E" | wc -l)
+          if [ "$C" = "1" ] && [ -d "/tmp/u/$E" ]; then SRC="/tmp/u/$E"; else SRC=/tmp/u; fi
           cp -r "$SRC"/. .
-          rm -f "$ZIP"
-          rm -f .github/workflows/unzip.yml
+          rm -f "$ZIP" .github/workflows/unzip.yml
+          echo "解壓完成，來源：$SRC"
 
       - name: Commit
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
-          git diff --cached --quiet || git commit -m "Setup project from zip"
-          git push
+          if git diff --cached --quiet; then
+            echo "沒有變動"
+          else
+            git commit -m "Setup project"
+            git push
+            echo "已提交"
+          fi
           
