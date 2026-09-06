@@ -1,38 +1,69 @@
 name: Unzip
-
-# 手機上傳專用：上傳 .zip 後手動執行本工作流程，由 Actions 在伺服器端解壓。
-# 只需執行一次；完成後本檔與 .zip 會自動刪除。
 on:
   workflow_dispatch:
-
 permissions:
   contents: write
-
 jobs:
   setup:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Unzip
+      - name: 診斷
+        run: |
+          echo "--- 倉庫根目錄 ---"
+          ls -A
+          echo "--- 找得到的 zip ---"
+          find . -name '*.zip' -not -path './.git/*'
+          echo "--- 診斷結束 ---"
+
+      - name: 解壓
         run: |
           set -e
           shopt -s dotglob
-          ZIP=$(ls *.zip 2>/dev/null | head -n 1)
+          ZIP=$(find . -name '*.zip' -not -path './.git/*' | head -n 1)
           if [ -z "$ZIP" ]; then
-            echo "::error::找不到 .zip，請先上傳 hk-transit-eta.zip"
+            echo "::error::找不到 .zip。到倉庫首頁確認 hk-transit-eta.zip 是否出現在檔案清單裡；沒有就重新上傳一次"
             exit 1
           fi
+          echo "使用：$ZIP"
           rm -rf /tmp/u && mkdir -p /tmp/u
           unzip -o -q "$ZIP" -d /tmp/u
-          E=$(ls -A /tmp/u); C=$(echo "$E" | wc -l)
-          if [ "$C" = "1" ] && [ -d "/tmp/u/$E" ]; then SRC="/tmp/u/$E"; else SRC=/tmp/u; fi
-          cp -r "$SRC"/. .
-          rm -f "$ZIP" .github/workflows/unzip.yml
-          echo "解壓完成，來源：$SRC"
+          SRC=""
+          for d in /tmp/u /tmp/u/*/ /tmp/u/*/*/; do
+            [ -d "$d" ] || continue
+            case "$d" in */) ;; *) d="$d"/ ;; esac
+            if [ -f "${d}settings.gradle.kts" ]; then SRC="$d"; break; fi
+          done
+          if [ -z "$SRC" ]; then
+            echo "::error::解壓後找不到 settings.gradle.kts，壓縮檔可能損壞"
+            find /tmp/u -maxdepth 2 | head -n 30
+            exit 1
+          fi
+          echo "專案根目錄：$SRC"
+          cp -r "$SRC". .
+          rm -rf /tmp/u
 
-      - name: Commit
+      - name: 驗證
         run: |
+          set -e
+          MISSING=0
+          for f in settings.gradle.kts app/build.gradle.kts \
+                   app/src/main/AndroidManifest.xml \
+                   gradle/wrapper/gradle-wrapper.jar \
+                   .github/workflows/build-apk.yml tools/build_dashboard.py; do
+            if [ -f "$f" ]; then echo "  OK   $f"; else echo "  缺   $f"; MISSING=1; fi
+          done
+          if [ "$MISSING" = "1" ]; then
+            echo "::error::關鍵檔案缺失，未刪除任何東西，請檢查後重跑"
+            exit 1
+          fi
+          rm -f *.zip .github/workflows/unzip.yml
+          echo "關鍵檔案齊全，已刪除壓縮檔與本工作流程"
+
+      - name: 提交
+        run: |
+          set -e
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
@@ -40,7 +71,8 @@ jobs:
             echo "沒有變動"
           else
             git commit -m "Setup project"
-            git push
-            echo "已提交"
+            git pull --rebase origin main || true
+            git push origin HEAD:main
+            echo "已提交並推送"
           fi
           
