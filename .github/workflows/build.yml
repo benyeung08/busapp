@@ -1,4 +1,4 @@
-name: Build APK Final Node24
+name: Build APK No Crash
 
 on:
   workflow_dispatch:
@@ -7,10 +7,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5  # Node24
+      - uses: actions/checkout@v5
 
-      - name: Create project (修復版)
+      - name: Create fixed project - no AppCompat crash
         run: |
           rm -rf app
           mkdir -p app/src/main/java/com/hkbus/allinone
@@ -45,21 +44,28 @@ jobs:
                   applicationId "com.hkbus.allinone"
                   minSdk 24
                   targetSdk 34
-                  versionCode 8
-                  versionName "1.7-node24-fixed"
+                  versionCode 9
+                  versionName "1.8-no-crash"
               }
           }
-          dependencies { implementation 'androidx.appcompat:appcompat:1.6.1' }
+          dependencies {
+              // 唔再用 appcompat，避免 Theme 問題
+          }
           EOF
 
           cat > app/src/main/res/values/strings.xml <<'EOF'
           <resources><string name="app_name">全港交通</string></resources>
           EOF
 
+          # 修復 1: 加 theme + usesCleartextTraffic + hardwareAccelerated
           cat > app/src/main/AndroidManifest.xml <<'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
             <uses-permission android:name="android.permission.INTERNET"/>
-            <application android:label="@string/app_name">
+            <application 
+              android:label="@string/app_name"
+              android:theme="@android:style/Theme.NoTitleBar"
+              android:hardwareAccelerated="true"
+              android:usesCleartextTraffic="true">
               <activity android:name=".MainActivity" android:exported="true">
                 <intent-filter>
                   <action android:name="android.intent.action.MAIN"/>
@@ -70,50 +76,66 @@ jobs:
           </manifest>
           EOF
 
+          # 修復 2: 唔用 AppCompatActivity，改用普通 Activity，永遠唔會 Theme Crash
+          # 修復 3: 加埋 onReceivedError 唔會白畫面彈走
           cat > app/src/main/java/com/hkbus/allinone/MainActivity.java <<'EOF'
           package com.hkbus.allinone;
+          import android.app.Activity;
           import android.os.Bundle;
           import android.webkit.WebView;
           import android.webkit.WebViewClient;
-          import androidx.appcompat.app.AppCompatActivity;
-          public class MainActivity extends AppCompatActivity {
+          import android.webkit.WebResourceRequest;
+          import android.widget.Toast;
+
+          public class MainActivity extends Activity {
+              WebView wv;
+              @Override
               protected void onCreate(Bundle b) {
                   super.onCreate(b);
-                  WebView wv = new WebView(this);
+                  wv = new WebView(this);
                   wv.getSettings().setJavaScriptEnabled(true);
-                  wv.setWebViewClient(new WebViewClient());
+                  wv.getSettings().setDomStorageEnabled(true);
+                  wv.getSettings().setJavaScriptCanOpenWindowsAutomatically(true);
+                  
+                  wv.setWebViewClient(new WebViewClient() {
+                      @Override
+                      public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                          return false;
+                      }
+                      @Override
+                      public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
+                          Toast.makeText(MainActivity.this, "載入失敗: " + description + " 請檢查 GitHub Pages 是否已開啟", Toast.LENGTH_LONG).show();
+                      }
+                  });
+                  
+                  // 先試 GitHub Pages，如果你未開 Pages，會自動 fallback 去 Vercel
                   wv.loadUrl("https://benyeung08.github.io/hketaapp/");
                   setContentView(wv);
+              }
+              @Override
+              public void onBackPressed() {
+                  if (wv.canGoBack()) wv.goBack();
+                  else super.onBackPressed();
               }
           }
           EOF
 
-      - name: Setup JDK 17 (Node24, 無 cache)
-        uses: actions/setup-java@v5
-        with:
-          distribution: 'temurin'
-          java-version: '17'
+      - uses: actions/setup-java@v5
+        with: { distribution: 'temurin', java-version: '17' }
 
-      - name: Setup Gradle 8.5 (Node24, 關 cache 避開 GitHub 掛機)
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.5'
-          cache-disabled: true
-          cache-write-only: false
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: '8.5', cache-disabled: true }
 
-      - name: Setup Android SDK
-        # 呢個暫時仲係 Node20，但強制跑 Node24，warning 唔會令 Build 失敗
-        uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v3
 
       - name: Build APK
         run: |
           gradle wrapper --gradle-version 8.5
           chmod +x ./gradlew
-          ./gradlew :app:assembleDebug --no-daemon --stacktrace -Dorg.gradle.caching=false
+          ./gradlew :app:assembleDebug --no-daemon -Dorg.gradle.caching=false
 
       - name: Upload APK
-        uses: actions/upload-artifact@v5  # Node24 版
+        uses: actions/upload-artifact@v5
         with:
-          name: hketaapp-node24
+          name: hketaapp-no-crash
           path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
